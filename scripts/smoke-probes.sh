@@ -41,8 +41,12 @@ _test_zim() { # 输出测试 ZIM 的本机路径，没有就现下载到临时�
   fi
   local dst="/tmp/pb-kiwix-$TEST_ZIM_NAME"
   if [[ ! -s "$dst" ]]; then
-    curl -fsSL --max-time 120 --proxy "${https_proxy:-${HTTPS_PROXY:-http://127.0.0.1:7890}}" \
-      -o "$dst" "$TEST_ZIM_URL" || { echo "下载测试 ZIM 失败：$TEST_ZIM_URL"; return 1; }
+    # GitHub 的托管机能直连外网；本地开发环境直连不通时，经代理再试。先直连，失败再退代理。
+    curl -fsSL --max-time 120 -o "$dst.part" "$TEST_ZIM_URL" ||
+      curl -fsSL --max-time 120 --proxy "${https_proxy:-${HTTPS_PROXY:-http://127.0.0.1:7890}}" \
+        -o "$dst.part" "$TEST_ZIM_URL" ||
+      { rm -f "$dst.part"; echo "下载测试 ZIM 失败：$TEST_ZIM_URL"; return 1; }
+    mv "$dst.part" "$dst"
   fi
   printf '%s\n' "$dst"
 }
@@ -66,7 +70,7 @@ data_write() {
   mkdir -p "$dst" || { echo "建不了 $dst"; return 1; }
   cp "$zim" "$dst/$TEST_ZIM_NAME" || { echo "复制测试 ZIM 进共享文件夹失败"; return 1; }
   # 等扫描服务（30 秒一轮）把它上架；等着的时间不该超过两分钟。
-  for i in $(seq 1 24); do
+  for ((i = 0; i < 24; i++)); do
     if catalog_has "$TEST_BOOK_TITLE"; then
       printf '%s\n' "$TEST_SEARCH_WORD" > "$SMOKE_STATE"
       return 0
@@ -86,10 +90,11 @@ data_check() {
   web_get / | grep -q 'Welcome to Kiwix Server' || { echo "首页不是 kiwix 页面（还是说明页？）"; return 1; }
   id="$(web_get /catalog/v2/entries | grep -oE 'urn:uuid:[a-f0-9-]+' | head -1)"
   [[ -n "$id" ]] || { echo "目录里取不到书的 uuid"; return 1; }
-  # 全文搜索：查一个词要有结果（结果页有 “Results … of N for …”）
-  web_get "/search?books.id=${id#urn:uuid:}&pattern=$TEST_SEARCH_WORD" | grep -Eq 'Results[^<]*of[^<]*for' \
+  # 全文搜索：查一个词要有结果（结果页是 “Results <b>1-25</b> of <b>N</b> for …”，N>0；
+  # 零结果页是 “No results were found for …”，实测 3.8.2）。
+  web_get "/search?books.id=${id#urn:uuid:}&pattern=$TEST_SEARCH_WORD" | grep -Eq 'of <b>[1-9][0-9]*</b>' \
     || { echo "搜索 $TEST_SEARCH_WORD 没有结果"; return 1; }
 }
 
 export IDENTITY_NA=1
-SMOKE_NOTE="sso none：kiwix-serve 没有账号体系，网页只在网关登录后面可达"
+export SMOKE_NOTE="sso none：kiwix-serve 没有账号体系，网页只在网关登录后面可达"
