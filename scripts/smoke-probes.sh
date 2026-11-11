@@ -1,61 +1,100 @@
 # shellcheck shell=bash
-# scripts/smoke.sh 的一项一项探测，跟着插件走。没写的项会 FAIL 并给出写法，不会默认放行。
+# kiwix 的冒烟探测。思路：
+# - 全新安装时共享文件夹还没有 .zim：首页应是插件的「还没有内容」说明页（无内容如实显示）。
+# - data_write 把一个很小的测试 ZIM 放进共享文件夹的「离线百科」子文件夹（插件的“数据”就在
+#   共享文件夹里，插件本身不存任何用户数据），等扫描服务把它上架，再把搜索词记进 $SMOKE_STATE。
+# - data_check 在 reinstall 之后证明：目录里列着这本书、首页不再是说明页、全文搜索有结果。
 #
-# 变量别叫 state：shellcheck 把这份文件连着 probes.sh 一起分析，probes.sh 自己也读一个 dev.sh 提供的 state；
-# 子壳体函数（fn() ( … )）里给 state 赋值，SC2031 就报在 probes.sh 上，CI 红。
-#
-# 变量：SMOKE_WEB_URL 是应用的网页入口（套件已去尾斜杠，但可能带路径，比如 SSO 登录页）；
-#       拼 API 路径用 SMOKE_WEB_ORIGIN（只有 scheme://host:port，入口的路径不掺进来），别直接接在 SMOKE_WEB_URL 后面。
-#
-# 页面：web_assert 从标准输入读页面，命中的确是应用的真实页面时返回 0。
-# 身份：identity_check 只证明身份：用应用自己的“当前用户”接口断言认出的是用户管理员，不碰应用里的数据。
-#       数据断言（是否配置过、有几条、内容对不对）全部交给 data_write / data_check：冒烟第 1 项会先装升级
-#       起点写数据，身份探针再断言“数据目录是空的”就会红。接口回字段时也只看类型（如 configured 是布尔、
-#       nodes 是数字），值和条数留给 data_check。
-#       没有用户体系时写 IDENTITY_NA=1，并在 SMOKE_NOTE 里写原因。dweb / web_get 是带用户会话的请求助手，可继续走应用自己的登录链。
-#       SSO 登录跳转不用自己写表单逻辑：dweb --sso 会从清单 webui.path 的入口出发（没写就是 /），提交核心
-#       登录页的 JS 自动表单并跟完重定向，返回的页面已带应用的登录态。
-# 工具：MCP_TOOL 写一个只读工具名（可带插件前缀），MCP_ARGS 是 JSON 参数；mcp_assert 从标准输入读调用结果。
-#       要断言多个工具时改成写 mcp_check；调用前要备数据时写 before_mcp。
-# 通知房间：申请了 notify 的插件把通知交给核心，核心以核心账号发进和主人的“Wonton”私聊。
-#       探针以主人身份读这个房间：probes_owner_room_wait <超时秒> <要找的文字> 等到开始之后发来的、包含这段文字的
-#       消息就返回 0，超时列出看到的最新消息并返回非 0。要先把等待挂到后台再发通知，否则消息可能在等待开始前就到：
-#         room_wait() {
-#           local marker="probe-$RANDOM" url
-#           url="$(docker exec "wonton-$SMOKE_INSTANCE--${SMOKE_PLUGIN_ID//./-}--web" printenv WONTON_NOTIFY_URL)"
-#           probes_owner_room_wait 120 "$marker" & local pid=$!
-#           docker exec "wonton-$SMOKE_INSTANCE--${SMOKE_PLUGIN_ID//./-}--web" wget -q -O /dev/null \
-#             --header 'Content-Type: application/json' --post-data "{\"title\":\"$marker\"}" "$url"
-#           wait "$pid"
-#         }
-#       上面的 web 换成插件里能发 HTTP 的服务；wget 换成那个服务里有的客户端。
-# 数据：合并前要验证“升级/重装不丢用户数据”时写 data_write 和 data_check（两个都写才跑）：data_write 用随机标记写
-#       一条数据并把标记原样存进 $SMOKE_STATE，data_check 读回标记去应用里找，对不上就打印看到了什么并返回非 0。
-#       应用不存用户数据时写 DATA_NA=1（两项记 N/A）。
-# 装之前要准备（如先配出口代理）：写 before_install。
+# 变量：SMOKE_WEB_URL 是插件网页入口（已去尾斜杠）；SMOKE_PLUGIN_ID/SMOKE_INSTANCE 由套件设好。
+# 插件没有 mcp（清单未声明，套件按 N/A 记），没有用户体系（IDENTITY_NA=1）。
 
-web_assert() { grep -q '你好'; }   # 示例页的标题
+# 测试 ZIM：Alpine Linux Wiki，约 3.1 MB，自带全文索引。dev.sh probes 时在仓库旁的
+# test-data/ 里就有；smoke 把工作区复制到临时目录，找不到就走代理现下载。
+TEST_ZIM_NAME=alpinelinux_en_all_maxi_2026-10.zim
+TEST_ZIM_URL=https://download.kiwix.org/zim/other/$TEST_ZIM_NAME
+TEST_BOOK_TITLE="Alpine Linux Wiki"
+TEST_SEARCH_WORD=apk
+SCAN_SUBDIR=离线百科
 
-identity_check() { # 页面回显的就是网关注入的用户名；示例页不存数据，也不拿数据判断身份
-  local page
-  page="$(dweb /)" || { echo "页面失败：$page"; return 1; }
-  grep -qF "你好，$SMOKE_OWNER" <<<"$page" || { echo "页面没回显用户 $SMOKE_OWNER：$(head -c 120 <<<"$page")"; return 1; }
+web_assert() { # 全新安装（空库）是说明页；有内容时是 kiwix 真实页面
+  if grep -q '还没有内容'; then
+    return 0
+  fi
+  grep -q 'Welcome to Kiwix Server'
 }
 
-# 数据：合并前要验证“升级/重装不丢用户数据”时写 data_write 和 data_check（两个都写才跑）：
-#   data_write 用随机标记写一条数据，把标记原样覆盖写进 $SMOKE_STATE（一个已建好的空文件，不是目录）；data_check 读回标记、去应用里找，
-#   找不到就打印看到了什么并返回非 0。
-# 应用不存用户数据时写 DATA_NA=1（两项记 N/A）。模板的示例页不存数据，所以这里是不适用。
-# 数据要写进插件容器时（Agent 插件的工作区标记等），容器名别自己拼：钩子契约里没有 SMOKE_SLUG，e2e 套件的
-# data_write 又跑在实例名导出之前，拼出来的名字缺段（No such container）；Bot 服务（清单声明了 bots）每个 Bot
-# 一组容器，名字还带 --<Bot 名> 后缀。按核心打的标签找，插件自带 smoke 和 e2e 套件两个运行环境都成立
-# （实例名没导出时按 SMOKE_BASE 的主机名第一段推）：
-#   _container() { # <插件 id> <服务名>：本实例里这个服务的容器
-#     local inst="${SMOKE_INSTANCE:-}" args=(--filter "label=wonton.plugin=$1" --filter "label=wonton.service=$2")
-#     if [[ -z "$inst" && -n "${SMOKE_BASE:-}" ]]; then
-#       inst="${SMOKE_BASE#http://}"; inst="${inst%%.*}"
-#     fi
-#     [[ -z "$inst" ]] || args+=(--filter "label=wonton.instance=${inst//-/}")
-#     docker ps --format '{{.Names}}' "${args[@]}" | head -1
-#   }
-export DATA_NA=1
+# 本实例里这个服务的容器（按核心打的标签找，smoke 与 dev.sh probes 两个环境都成立）
+_container() { # <插件 id> <服务名>
+  local inst="${SMOKE_INSTANCE:-}" args=(--filter "label=wonton.plugin=$1" --filter "label=wonton.service=$2")
+  if [[ -z "$inst" && -n "${SMOKE_BASE:-}" ]]; then
+    inst="${SMOKE_BASE#http://}"; inst="${inst%%.*}"
+  fi
+  [[ -z "$inst" ]] || args+=(--filter "label=wonton.instance=${inst//-/}")
+  docker ps --format '{{.Names}}' "${args[@]}" | head -1
+}
+
+_test_zim() { # 输出测试 ZIM 的本机路径，没有就现下载到临时文件
+  local local_copy="$SMOKE_DIR/../test-data/$TEST_ZIM_NAME"
+  if [[ -s "$local_copy" ]]; then
+    printf '%s\n' "$local_copy"
+    return 0
+  fi
+  local dst="/tmp/pb-kiwix-$TEST_ZIM_NAME"
+  if [[ ! -s "$dst" ]]; then
+    # GitHub 的托管机能直连外网；本地开发环境直连不通时，经代理再试。先直连，失败再退代理。
+    curl -fsSL --max-time 120 -o "$dst.part" "$TEST_ZIM_URL" ||
+      curl -fsSL --max-time 120 --proxy "${https_proxy:-${HTTPS_PROXY:-http://127.0.0.1:7890}}" \
+        -o "$dst.part" "$TEST_ZIM_URL" ||
+      { rm -f "$dst.part"; echo "下载测试 ZIM 失败：$TEST_ZIM_URL"; return 1; }
+    mv "$dst.part" "$dst"
+  fi
+  printf '%s\n' "$dst"
+}
+
+_share_dir() { # 共享文件夹 documents 在宿主上的路径：从容器挂载里读，不猜数据目录布局
+  local c
+  c="$(_container "$SMOKE_PLUGIN_ID" rescan)" || return 1
+  [[ -n "$c" ]] || { echo "找不到 rescan 容器"; return 1; }
+  docker inspect --format '{{range .Mounts}}{{if eq .Destination "/documents"}}{{.Source}}{{end}}{{end}}' "$c"
+}
+
+catalog_has() { # <要找的文字>：经网关查 kiwix 目录（首页列表的数据源）
+  web_get /catalog/v2/entries | grep -qF "$1"
+}
+
+data_write() {
+  local zim share_dir dst i
+  zim="$(_test_zim)" || return 1
+  share_dir="$(_share_dir)" || { echo "读不到共享文件夹在宿主上的路径"; return 1; }
+  dst="$share_dir/$SCAN_SUBDIR"
+  mkdir -p "$dst" || { echo "建不了 $dst"; return 1; }
+  cp "$zim" "$dst/$TEST_ZIM_NAME" || { echo "复制测试 ZIM 进共享文件夹失败"; return 1; }
+  # 等扫描服务（30 秒一轮）把它上架；等着的时间不该超过两分钟。
+  for ((i = 0; i < 24; i++)); do
+    if catalog_has "$TEST_BOOK_TITLE"; then
+      printf '%s\n' "$TEST_SEARCH_WORD" > "$SMOKE_STATE"
+      return 0
+    fi
+    sleep 5
+  done
+  echo "放了 $TEST_ZIM_NAME，两分钟内目录里没出现 $TEST_BOOK_TITLE"
+  return 1
+}
+
+data_check() {
+  local marker id
+  marker="$(cat "$SMOKE_STATE")"
+  [[ "$marker" == "$TEST_SEARCH_WORD" ]] || { echo "标记对不上：$marker"; return 1; }
+  catalog_has "$TEST_BOOK_TITLE" || { echo "目录里没有 $TEST_BOOK_TITLE"; return 1; }
+  # 首页不再是「还没有内容」说明页，而是 kiwix 自己的页面
+  web_get / | grep -q 'Welcome to Kiwix Server' || { echo "首页不是 kiwix 页面（还是说明页？）"; return 1; }
+  id="$(web_get /catalog/v2/entries | grep -oE 'urn:uuid:[a-f0-9-]+' | head -1)"
+  [[ -n "$id" ]] || { echo "目录里取不到书的 uuid"; return 1; }
+  # 全文搜索：查一个词要有结果（结果页是 “Results <b>1-25</b> of <b>N</b> for …”，N>0；
+  # 零结果页是 “No results were found for …”，实测 3.8.2）。
+  web_get "/search?books.id=${id#urn:uuid:}&pattern=$TEST_SEARCH_WORD" | grep -Eq 'of <b>[1-9][0-9]*</b>' \
+    || { echo "搜索 $TEST_SEARCH_WORD 没有结果"; return 1; }
+}
+
+export IDENTITY_NA=1
+export SMOKE_NOTE="sso none：kiwix-serve 没有账号体系，网页只在网关登录后面可达"

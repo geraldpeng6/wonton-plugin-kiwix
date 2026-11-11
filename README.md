@@ -1,43 +1,38 @@
-# 云吞插件模板
+# 离线百科（Kiwix）
 
-开发流程见[插件开发指南](https://github.com/wontonapp/wonton-docs/blob/main/develop.md)。
+把维基百科、维基词典、可汗学院这类内容整个下载到家里，断网也能查。插件用 [kiwix-serve](https://github.com/kiwix/kiwix-tools) 把 .zim 内容文件变成一个可全文检索的网页，家里人打开就能用，不需要登录。
 
-这是一个能安装的示例插件 `app.example.hello`：使用 nginx 官方镜像显示问候页，经网关的 `sso: proxy` 注入用户名，页面显示“你好，<用户名>”。示例没有应用账号、持久化数据或 MCP 工具。
+## 用法
 
-## 示例文件
+1. 从 [library.kiwix.org](https://library.kiwix.org/) 下载想要的 .zim 文件。整部中文维基的精简版（`wikipedia_zh_all_mini`）约 4.8 GB，单个学科的迷你版只要十几 MB（如「Wikipedia 中文·化学 迷你版」约 15 MB），建议先小后大。
+2. 把 .zim 文件放进共享文件夹「文档」（documents）的「离线百科」子文件夹（第一次自己新建这个文件夹）。
+3. 一分钟内文件自动上架，打开插件网页就能读和搜索。放进去的新文件也一样，不用重启插件（见下）。
 
-| 路径 | 内容 |
-| --- | --- |
-| `docker-compose.yml` | 示例清单、nginx 服务和三个 `configs` |
-| `web/default.conf.template` | nginx 配置，启用 SSI 回显用户名并提供健康检查入口；只放行来自核心地址（`${WONTON_CORE_ADDRESS}`）的请求，其余来源 403 |
-| `web/index.html` | 问候页 |
-| `web/tokens.css` | 页面主题变量的后备值 |
-| `tabs/` | 示例主页的应用页面图标 |
-| `screenshots/home.png` | 商店详情页的示例截图 |
-| `scripts/smoke-probes.sh` | 检查真实页面和网关注入身份的插件探针 |
+## 数据存在哪
 
-从模板创建自己的插件后，替换示例清单、网页和素材；具体步骤见[写插件](https://github.com/wontonapp/wonton-docs/blob/main/develop.md#写插件)。
+- 内容 .zim 文件只在共享文件夹里，插件以只读方式挂载，不会改动它们；备份照共享文件夹的常规做法。
+- 插件自己的数据目录里只有两样东西：kiwix 的库索引文件（`library.xml`）和扫描标记。它们都能随时重建——删掉也没关系，扫描服务一分钟内会重新生成。
 
-## 对着别的栈跑探针
+## 新放入的 .zim 怎么生效
 
-`probes`、`api`、`session` 按 `.wonton/.env` 的 `WONTON_BASE_DOMAIN` 拼核心地址，`up` 起的栈自己写这个键。插件装进别人的栈、或者对着已有环境排查时，把那套栈的基础域名写进 `.wonton/.env`，不要只按实例名猜地址：实例名只是资源名前缀，网关按 Host 认域名，拼错了会回“没有安装”。
+上游 kiwix-serve 只认启动时给定的库文件，没有扫描目录的功能。插件带一个扫描服务（用的也是上游镜像里的 kiwix-manage），每 30 秒看一眼「离线百科」文件夹，有变化就用 kiwix-manage 重建库文件；kiwix-serve 开了 `--monitorLibrary`，库文件一换就自动重载——实测运行中放入或删除 .zim，不用重启插件，一分钟内生效。
 
-```bash
-WONTON_BASE_DOMAIN=wonton.localhost
-```
+## 没有内容时
 
-## 核心镜像
+库为空时插件照常运行：首页显示「还没有内容」，写明把 .zim 放进哪个文件夹。这不算故障（服务本身是好的，等的是内容），健康检查显示健康；放了读不了的损坏文件时，扫描日志会写明跳过了哪个文件，其余文件照常上架。
 
-检查和冒烟默认用套件里的核心镜像（`ghcr.io/wontonapp/wonton-core:main`）；要固定别的核心镜像，在仓库 Settings → Variables 设 `WONTON_CORE_IMAGE`，手动触发“检查”时填的 `core-image` 输入优先。
+## 已知限制
 
-## 更新开发套件
+- 只读：插件不下载、不管理内容，下载要去 library.kiwix.org（或任何能拿到 .zim 的地方），再放进共享文件夹。经出网代理下载大文件的需求，用有下载能力的插件（如 metube）接共享文件夹是现成做法。
+- 搜索效果取决于 .zim 自带的全文索引（文件名带 `_ftindex` 的才有）；扫描按文件名认 `*.zim`，文件名带换行的不支持。
+- 扫描只在「离线百科」这一个子文件夹里找，放别处不生效。
 
-```bash
-scripts/dev.sh kit-update
-```
+## 资源占用
 
-在从模板新建的插件仓库中更新套件；本仓库是套件源头，执行时只提示并退出。版本、可选引用和自定义脚本约定见[开发指南](https://github.com/wontonapp/wonton-docs/blob/main/develop.md#更新开发套件)。
+本机实测（3 MB 的测试 ZIM，一本书，读容器 cgroup 的 memory.current）：三个容器常驻内存合计约 90 MB（kiwix-serve 40 MB、扫描服务 15 MB、nginx 33 MB），清单按这个量级取 256M。内存随内容文件的打开量增长（kiwix-serve 用内存映射读文件，映射页计入容器内存、紧张时可回收），整部中文维基精简版这种大文件多开一些查询时会更高。
 
-## 图标
+## 许可证与商标
 
-`icon.svg` 是本仓库原创线条图标，按本仓库 MIT 许可证分发，见 [NOTICE](NOTICE)。
+- 上游 kiwix-serve：GPL-3.0，镜像 `ghcr.io/kiwix/kiwix-serve`（上游官方）。
+- 插件包本身：MIT，见 [LICENSE](LICENSE)。
+- 图标用 Kiwix 官方标志，来源、处理和许可见 [NOTICE](NOTICE)。Kiwix 名称与标志是 Association Kiwix 的商标，本插件与 Kiwix 项目无隶属关系。
