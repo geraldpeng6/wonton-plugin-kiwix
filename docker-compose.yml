@@ -70,6 +70,39 @@ services:
       start_period: 30s
       start_interval: 1s
 
+  # OpenAPI→MCP 适配器（images/mcp-openapi-proxy/，由 .github/workflows/publish-images.yml 构建发布）：
+  # 把 kiwix-serve 的查询接口包成 MCP 工具给 Bot 用，规范见 mcp/openapi.json，全 GET 只读。
+  # 上游 mcp-openapi-proxy 0.4.0（MIT），镜像只是 pip 安装上游包，没有改源码。
+  mcp:
+    image: ghcr.io/geraldpeng6/mcp-openapi-proxy:0.4.0@sha256:f18d836e3c50061ec166f1b4a2fa27739183da37191ebd4a6374b683354b73bc
+    user: "${PUID}:${PGID}"
+    read_only: true
+    environment:
+      MCP_TRANSPORT: streamable-http
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "8000"
+      OPENAPI_SPEC_URL: file:///mcp/openapi.json
+      SERVER_URL_OVERRIDE: http://server:8080
+      # 适配器只连插件网络里的上游，不出网：代理变量写空（写成空=这个服务不走代理）。
+      # python 客户端会读这些变量，服务名不在 NO_PROXY 名单里时内网请求会被送去出网代理，报 502。
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      http_proxy: ""
+      https_proxy: ""
+    configs:
+      - source: openapi
+        target: /mcp/openapi.json
+    depends_on:
+      server:
+        condition: service_healthy
+    healthcheck:
+      # 镜像只有 python（slim 没有 curl/wget），健康检查就用它。
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=5)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      start_interval: 2s
+
   web:
     image: nginx:1.31.8-alpine@sha256:713fc2ebfd92e8217db451477182ee91944b123d2b1ee9fd5a8c6e91ca6c3a11
     read_only: true
@@ -95,6 +128,8 @@ services:
 configs:
   rescan:
     file: rescan.sh
+  openapi:
+    file: mcp/openapi.json
   empty-page:
     file: web/empty.html
   web-conf:
@@ -105,7 +140,7 @@ configs:
 x-wonton:
   spec: "0.11"
   id: org.kiwix.kiwix-serve
-  version: 0.1.0
+  version: 0.1.1
   kind: app
   title: { zh: 离线百科（Kiwix）, en: Offline Wikipedia (Kiwix) }
   description:
@@ -128,13 +163,17 @@ x-wonton:
       内容文件（.zim）从 library.kiwix.org 下载，放进共享文件夹「文档」的「离线百科」文件夹就自动上架，文件只读、不会被改动。下载好的内容家里所有人都能看，不需要再登录。
 
       想要哪个百科就放哪个：整部中文维基的精简版约 4.8 GB，单个学科的迷你版只要十几 MB，适合先试小再加大。
+
+      家里的 AI 助手也能帮你查这套离线百科：问它一个问题，它会去查词条、做全文搜索，再把找到的内容讲给你。
     en: |
       Keep a whole Wikipedia, dictionary or Khan Academy at home and look things up with no internet — kids can research offline.
 
       Content files (.zim) come from library.kiwix.org; drop them into the Offline Wikipedia folder in the Documents shared folder and they appear on their own. Files are read-only and never modified. Everyone at home can read them, no extra sign-in.
 
       Pick only what you need: a trimmed-down Chinese Wikipedia is about 4.8 GB, while a single-subject mini edition is a dozen or so MB — start small, grow later.
-  release_notes: { zh: 第一版。, en: First release. }
+
+      The home AI assistant can search this offline encyclopedia too: ask it a question and it looks up entries, runs the full-text search and tells you what it found.
+  release_notes: { zh: 家里的 AI 助手能帮你查离线百科了：查词条、全文搜索、随机读一篇。, en: "The home AI assistant can search the offline encyclopedia now: look up entries, full-text search and read a random article." }
   setup:
     zh: 从 library.kiwix.org 下载一个 .zim 文件（例如“Wikipedia 中文·化学 迷你版”，约 15 MB），放进共享文件夹「文档」的「离线百科」文件夹。
     en: Download a .zim file from library.kiwix.org (for example the Wikipedia Chinese Chemistry mini edition, about 15 MB) and put it into the Offline Wikipedia folder in the Documents shared folder.
@@ -143,9 +182,15 @@ x-wonton:
     port: 80
     # kiwix-serve 没有账号体系；网页只在网关登录后面可达，家里登录后即用。
     sso: none
+  mcp:
+    service: mcp
+    port: 8000
+    transport: streamable-http
   permissions:
     # 只读：共享文件夹以 :ro 挂载，插件不写用户的文件。
     - storage.share.documents:read
+    # MCP 工具经核心总线暴露给 Bot；规范 0.11 起只有声明 tools 权限的插件才注入 WONTON_MCP_URL。
+    - tools
   # 上游镜像有 amd64 和 arm64（docker buildx imagetools inspect）；内存按实测取整（见 README）。
   requirements:
     arch: [amd64, arm64]
