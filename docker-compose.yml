@@ -83,6 +83,12 @@ services:
       MCP_PORT: "8000"
       OPENAPI_SPEC_URL: file:///mcp/openapi.json
       SERVER_URL_OVERRIDE: http://server:8080
+      # 适配器只连插件网络里的上游，不出网：代理变量写空（写成空=这个服务不走代理）。
+      # python 客户端会读这些变量，服务名不在 NO_PROXY 名单里时内网请求会被送去出网代理，报 502。
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      http_proxy: ""
+      https_proxy: ""
     configs:
       - source: openapi
         target: /mcp/openapi.json
