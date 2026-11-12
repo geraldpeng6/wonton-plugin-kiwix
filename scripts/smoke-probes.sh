@@ -1,4 +1,4 @@
-# shellcheck shell=bash
+# shellcheck shell=bash disable=SC2034
 # kiwix 的冒烟探测。思路：
 # - 全新安装时共享文件夹还没有 .zim：首页应是插件的「还没有内容」说明页（无内容如实显示）。
 # - data_write 把一个很小的测试 ZIM 放进共享文件夹的「离线百科」子文件夹（插件的“数据”就在
