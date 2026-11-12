@@ -74,7 +74,7 @@ services:
   # 把 kiwix-serve 的查询接口包成 MCP 工具给 Bot 用，规范见 mcp/openapi.json，全 GET 只读。
   # 上游 mcp-openapi-proxy 0.4.0（MIT），镜像只是 pip 安装上游包，没有改源码。
   mcp:
-    image: ghcr.io/geraldpeng6/mcp-openapi-proxy:0.1.1@sha256:7db3728c3c77b4146d17eb29494beeac3843443bc36468298e3b031edce52822
+    image: ghcr.io/geraldpeng6/mcp-openapi-proxy:0.4.0@sha256:f18d836e3c50061ec166f1b4a2fa27739183da37191ebd4a6374b683354b73bc
     user: "${PUID}:${PGID}"
     read_only: true
     environment:
