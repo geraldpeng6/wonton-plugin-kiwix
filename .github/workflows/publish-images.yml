@@ -1,0 +1,40 @@
+# 发布 MCP 适配器镜像：images/mcp-openapi-proxy 是 python-slim 里 pip 安装的上游包，
+# 套件的检查工作流探不到这个子目录，这里只做构建发布，lint 由 Dockerfile 本身的简单性兜底。
+# 发布后把清单列表的摘要写进本仓库和 mtranserver 仓库的 compose。
+# 包要公开（GHCR 新包默认私有，公开只能在网页上改：包页面 → Package settings → Change visibility）。
+name: 发布 MCP 适配器镜像
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: arm64
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # tag 是上游包的版本：Dockerfile 里的 ARG、这里的 tag 和两个插件 compose 里的引用要一起改。
+      - id: build
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: images/mcp-openapi-proxy
+          file: images/mcp-openapi-proxy/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: false
+          tags: ghcr.io/geraldpeng6/mcp-openapi-proxy:0.4.0
+          labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+      - run: echo "摘要 ${{ steps.build.outputs.digest }}" >>"$GITHUB_STEP_SUMMARY"
