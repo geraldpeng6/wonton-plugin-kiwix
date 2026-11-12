@@ -17,11 +17,19 @@ TEST_BOOK_TITLE="Alpine Linux Wiki"
 TEST_SEARCH_WORD=apk
 SCAN_SUBDIR=离线百科
 
-web_assert() { # 全新安装（空库）是说明页；有内容时是 kiwix 真实页面
+web_assert() { # 全新安装（空库）是说明页；有内容时是 kiwix 真实页面。两个分支断的是同一件事：网页经网关可达。
   if grep -q '还没有内容'; then
     return 0
   fi
-  grep -q 'Welcome to Kiwix Server'
+  # 实测（3.8.2）：升级重建容器后紧跟的第一次页面请求可能只拿到页面前缀（连接早关，curl 仍算成功），
+  # <title> 那段不在正文里；重取一次再断言，还不命中就照实失败（空库和有书时 / 都是同一份 SPA，
+  # <title>Welcome to Kiwix Server</title> 恒在，实测核对过）。
+  if grep -q 'Welcome to Kiwix Server'; then
+    return 0
+  fi
+  local body
+  body="$(web_get /)" || return 1
+  grep -q 'Welcome to Kiwix Server' <<<"$body"
 }
 
 # 本实例里这个服务的容器（按核心打的标签找，smoke 与 dev.sh probes 两个环境都成立）
