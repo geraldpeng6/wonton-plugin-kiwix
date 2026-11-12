@@ -8,6 +8,13 @@
 2. 把 .zim 文件放进共享文件夹「文档」（documents）的「离线百科」子文件夹（第一次自己新建这个文件夹）。
 3. 一分钟内文件自动上架，打开插件网页就能读和搜索。放进去的新文件也一样，不用重启插件（见下）。
 
+## 家里的 AI 助手
+
+装好后云吞里的 AI 助手（Bot）也能帮你查这套离线百科：查词条、全文搜索、随机读一篇，都是只读查询。实现是
+`mcp/openapi.json` 手写的接口规范加 [mcp-openapi-proxy](https://github.com/matthewhand/mcp-openapi-proxy)
+0.4.0 适配器（`images/mcp-openapi-proxy/`，MIT，见 [NOTICE](NOTICE)），上游没有发官方镜像，镜像由本仓库
+构建发布。
+
 ## 数据存在哪
 
 - 内容 .zim 文件只在共享文件夹里，插件以只读方式挂载，不会改动它们；备份照共享文件夹的常规做法。

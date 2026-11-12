@@ -11,6 +11,13 @@ Kiwix 标志
 商标说明：Kiwix 名称与标志是 Association Kiwix 的商标。本插件是独立的第三方插件，
 与 Kiwix 项目无隶属关系，也未获其背书。
 
+MCP 适配器
+==========
+
+mcp 服务用的镜像基于 mcp-openapi-proxy（https://github.com/matthewhand/mcp-openapi-proxy），
+版本 0.4.0，MIT License。镜像只是 pip 安装上游包，没有改它的源码；MIT 许可证全文见上游仓库的
+LICENSE 文件（https://github.com/matthewhand/mcp-openapi-proxy/blob/v0.4.0/LICENSE）。
+
 上游许可证全文
 
 Attribution-ShareAlike 4.0 International

@@ -4,9 +4,10 @@
 # - data_write 把一个很小的测试 ZIM 放进共享文件夹的「离线百科」子文件夹（插件的“数据”就在
 #   共享文件夹里，插件本身不存任何用户数据），等扫描服务把它上架，再把搜索词记进 $SMOKE_STATE。
 # - data_check 在 reinstall 之后证明：目录里列着这本书、首页不再是说明页、全文搜索有结果。
+# - MCP：工具经总线来自 mcp/openapi.json（全 GET 只读）；目录工具不需要参数，用它做真实调用。
 #
 # 变量：SMOKE_WEB_URL 是插件网页入口（已去尾斜杠）；SMOKE_PLUGIN_ID/SMOKE_INSTANCE 由套件设好。
-# 插件没有 mcp（清单未声明，套件按 N/A 记），没有用户体系（IDENTITY_NA=1）。
+# 插件没有用户体系（IDENTITY_NA=1）。
 
 # 测试 ZIM：Alpine Linux Wiki，约 3.1 MB，自带全文索引。dev.sh probes 时在仓库旁的
 # test-data/ 里就有；smoke 把工作区复制到临时目录，找不到就走代理现下载。
@@ -62,7 +63,7 @@ catalog_has() { # <要找的文字>：经网关查 kiwix 目录（首页列表�
   web_get /catalog/v2/entries | grep -qF "$1"
 }
 
-data_write() {
+_place_zim() { # 放测试 ZIM 并等扫描服务上架（MCP 探针和 data_write 共用：目录里有书，工具才有东西可查）
   local zim share_dir dst i
   zim="$(_test_zim)" || return 1
   share_dir="$(_share_dir)" || { echo "读不到共享文件夹在宿主上的路径"; return 1; }
@@ -72,13 +73,24 @@ data_write() {
   # 等扫描服务（30 秒一轮）把它上架；等着的时间不该超过两分钟。
   for ((i = 0; i < 24; i++)); do
     if catalog_has "$TEST_BOOK_TITLE"; then
-      printf '%s\n' "$TEST_SEARCH_WORD" > "$SMOKE_STATE"
       return 0
     fi
     sleep 5
   done
   echo "放了 $TEST_ZIM_NAME，两分钟内目录里没出现 $TEST_BOOK_TITLE"
   return 1
+}
+
+# MCP 探针：目录工具不需要参数；tools/list 里它必须标 readOnlyHint=true（探针套件核对），真实调用返回书目录。
+MCP_TOOL=get_catalog_v2_entries
+MCP_ARGS={}
+mcp_assert() { grep -qF "$TEST_BOOK_TITLE"; }
+
+before_mcp() { _place_zim; }
+
+data_write() {
+  _place_zim || return 1
+  printf '%s\n' "$TEST_SEARCH_WORD" > "$SMOKE_STATE"
 }
 
 data_check() {
